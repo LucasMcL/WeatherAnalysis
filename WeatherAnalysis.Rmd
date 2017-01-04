@@ -1,0 +1,146 @@
+---
+title: "Most Damaging Kinds of Storms in the U.S. from 1950 to 2011"
+author: "Lucas McLaughlin"
+date: "Thursday, May 14, 2015"
+output: html_document
+---
+# Synopsis
+In this report we aim to answer two questions regarding storms in the U.S.:  
+1. Across the United States, which types of events are most harmful with respect to population health?  
+2. Across the United States, which types of events have the greatest economic consequences?  
+To answer this question, data was obtained from the [U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2), which includes data on major hydrological events from 1950 to 2011.  We conclude that tornados have been most harmful to population health and that flooding has been most damaging to the economy.
+
+# Data Processing
+This analysis assumes the presence of the downloaded file in the working directory.
+
+## Reading in the data
+```{r load packages, message = F}
+library(ggplot2)
+library(plyr)
+library(dplyr)
+```
+
+We first load in the data to R using the read.csv function.
+```{r download, cache = TRUE}
+dat <- read.csv("repdata-data-StormData.csv")
+dim(dat)
+```
+
+For ease of readability, column names have been converted to lower case and _ replaced with .
+```{r columnnames, cache = TRUE}
+names(dat) <- gsub("_", ".", tolower(names(dat)))
+names(dat)[1:5]
+```
+
+## Cleaning the data
+
+To answer our question, we are primarily interested in the columns relating to the event type, fatalaties/injuries, and damages.  Let's retain those columns along with dates, state info, and remarks.
+```{r select columns, cache = TRUE}
+dat <- select(dat, bgn.date, state, evtype, fatalities, injuries,
+              propdmg, propdmgexp, cropdmg, cropdmgexp, remarks, refnum)
+head(dat)
+```
+
+Let's begin by looking at the different kinds of weather events.
+```{r event types, cache = TRUE}
+len <- length(unique(dat$evtype))
+```
+
+It appears there are `r len` unique weather events recorded in this dataset.  This doesn't quite add up, because the [documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf) provided by the NOAA indicates 48 different types of events, with some more specific categorization of major categories such as tornados, hurricanes, and floods.  Let's look at the most frequently occuring events.
+
+```{r frequent events, cache = TRUE}
+tab <- sort(table(dat$evtype), decreasing = TRUE)
+tab.percent = (tab / nrow(dat)) * 100
+names(tab.percent[tab.percent >= 1])
+```
+
+It appears not all of these categeries are necessarily unique.  For example, TSTM wind, thunderstorm wind, and thunderstorm winds are all really the same thing.  Let's address this when we get to the analysis and know which events we will be focusing on.  
+
+Now let's look at the property and crop damage data.  Property damaage is recorded with a number in the propdmg column and either a "K", "M", or "B" in the propdmgexp column, indicating whether the number represents thousands, millions, or billions respectively.  The same is true of the crop damage.  Let's look at the most frequently occuring units to get a sense of the data, and to examine outliers.
+
+```{r units, cache = TRUE}
+prop.exp.tab <- sort(table(dat$propdmgexp), decreasing = TRUE)
+prop.exp.tab[1:10]
+crop.exp.tab <- sort(table(dat$cropdmgexp), decreasing = TRUE)
+crop.exp.tab[1:10]
+```
+
+There do appear to be some various other characters, perhaps indicating other powers of 10.  These are infrequent enough that they can be ignored, and just the data containing K, M, and B considered.  (Along with their lower-case equivalents).  Let's create new columns that contain the property and crop damage as pure numerical values, and lastly, a column containing the total combined property and crop damages and a column containing total fatalities + injuries.
+
+```{r prop and crop, cache = TRUE}
+dat$prop <- rep(NA, times = nrow(dat)) # initialize columns with NAs
+dat$crop <- rep(NA, times = nrow(dat))
+dat$total.dmg <- rep(NA, times = nrow(dat))
+dat$total.harm <- rep(NA, times = nrow(dat))
+
+propk <- dat$propdmgexp == "K" | dat$propdmgexp == "k"
+dat[propk, ]$prop <- dat[propk, ]$propdmg * 1000
+propm <- dat$propdmgexp == "M" | dat$propdmgexp == "m"
+dat[propm, ]$prop <- dat[propm, ]$propdmg * 1000000
+propb <- dat$propdmgexp == "B" | dat$propdmgexp == "b"
+dat[propb, ]$prop <- dat[propb, ]$propdmg * 1000000000
+
+cropk <- dat$cropdmgexp == "K" | dat$cropdmgexp == "k"
+dat[cropk, ]$crop <- dat[cropk, ]$cropdmg * 1000
+cropm <- dat$cropdmgexp == "M" | dat$cropdmgexp == "m"
+dat[cropm, ]$crop <- dat[cropm, ]$cropdmg * 1000000
+cropb <- dat$cropdmgexp == "B" | dat$cropdmgexp == "b"
+dat[cropb, ]$crop <- dat[cropb, ]$cropdmg * 1000000000
+
+dat$total.dmg <- dat$crop + dat$prop
+dat$total.harm <- dat$injuries + dat$fatalities
+```
+
+# Results
+
+Let's start by looking at what kinds of events contain the total number of injuries and fatalities.
+```{r total injuries}
+total.harm <- tapply(dat$total.harm, dat$evtype, sum, na.rm = TRUE)
+total.harm <- sort(total.harm, decreasing = TRUE)
+total.harm[1:10]
+```
+
+It is clear that tornados account for the greatest number of fatalaties and injuries from 1950 to 2011.  For the sake of further analysis, though, let's modify our dataset to account for some of the duplicate categories.  For the purposes of this analysis, "FLOOD," "RIVER FLOOD," and "FLASH FLOOD" are considered to be the same event, as are "HEAT" and "EXCESSIVE HEAT."
+
+```{r event type}
+tstm <- dat$evtype == "TSTM WIND" | dat$evtype == "THUNDERSTORM WINDS"
+dat[tstm, ]$evtype <- "THUNDERSTORM WIND"
+flash.flood <- dat$evtype == "FLASH FLOOD" | dat$evtype == "RIVER FLOOD"
+dat[flash.flood, ]$evtype <- "FLOOD"
+heat <- dat$evtype == "HEAT"
+dat[heat, ]$evtype <- "EXCESSIVE HEAT"
+hurricane <- grep("(HURRICANE )|HURRICANE", dat$evtype) # All hurricanes lumped together
+dat[hurricane, ]$evtype <- "HURRICANE/TYPHOON"
+dat$evtype <- as.factor(dat$evtype)
+```
+
+Now let's reexamine which events have produced the greatest number of injuries and fatalities.
+```{r reexamine total injuries, }
+total.harm <- tapply(dat$total.harm, dat$evtype, sum, na.rm = TRUE)
+total.harm <- sort(total.harm, decreasing = TRUE)
+events <- names(total.harm)
+harm <- as.numeric(total.harm)
+harm.df <- data.frame(Event = factor(events, levels = events),
+                      Harm = harm)
+g <- ggplot(harm.df[1:5, ], aes(x = Event, y = Harm))
+g + geom_bar(stat = "identity") +
+  ggtitle("Total Injuries and Fatalities from Hydrological Events (1950 to 2011)") +
+  ylab("Total Injuries and Fatalities") + 
+  theme(text = element_text(size=10))
+```
+
+Lastly, let's look at what events accounted for the most property and crop damage.
+```{r}
+total.dmg <- tapply(dat$total.dmg, dat$evtype, sum, na.rm = TRUE)
+total.dmg <- sort(total.dmg, decreasing = TRUE)
+events <- names(total.dmg)
+dmg <- as.numeric(total.dmg)
+dmg.df <- data.frame(Event = factor(events, levels = events),
+                     Damage = dmg)
+g <- ggplot(dmg.df[1:5, ], aes(x = Event, y = Damage))
+g + geom_bar(stat = "identity") +
+  ggtitle("Total Property and Crop Damage from Hydrological Events (1950 to 2011)") +
+  ylab("Total Property and Crop Damage") + 
+  theme(text = element_text(size=10))
+```
+
